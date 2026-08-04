@@ -1,0 +1,10 @@
+{
+  "name": "painel-risco-churn-ccli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Painel de alunos em risco de churn da CCLi — estado compartilhado em Netlify Blobs",
+  "dependencies": {
+    "@netlify/blobs": "^10.7.9"
+  }
+}

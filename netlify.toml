@@ -1,0 +1,7 @@
+[build]
+  publish = "public"
+  command = "echo 'site estático — nada a construir'"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
