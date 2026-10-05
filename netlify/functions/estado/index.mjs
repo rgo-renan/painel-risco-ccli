@@ -40,12 +40,47 @@ function loja() {
   return getStore({ name: NOME_LOJA, consistency: 'strong' });
 }
 
+/* Meses arquivados ficam em blobs próprios (arquivo-2026-07), fora do
+   estado vivo: o histórico cresce sem engordar o que trafega a cada
+   registro do CS. São snapshots congelados, então não há fusão —
+   quem arquiva, arquiva por inteiro. */
+const PREFIXO_ARQ = 'arquivo-';
+const MES_VALIDO = /^\d{4}-\d{2}$/;
+
 export default async (req) => {
   if (!autorizado(req)) return json({ erro: 'chave-invalida' }, 401);
 
   const store = loja();
+  const mes = new URL(req.url).searchParams.get('mes');
+
+  if (mes) {
+    if (!MES_VALIDO.test(mes)) return json({ erro: 'mes-invalido' }, 400);
+    const chave = PREFIXO_ARQ + mes;
+
+    if (req.method === 'GET') {
+      const texto = await store.get(chave, { type: 'text' });
+      return json(texto || 'null');
+    }
+    if (req.method === 'PUT' || req.method === 'POST') {
+      const corpo = await req.text();
+      if (!corpo) return json({ erro: 'corpo-vazio' }, 400);
+      try { JSON.parse(corpo); } catch { return json({ erro: 'json-invalido' }, 400); }
+      await store.set(chave, corpo);
+      return json({ ok: true, mes });
+    }
+    if (req.method === 'DELETE') {
+      await store.delete(chave);
+      return json({ ok: true, mes });
+    }
+    return json({ erro: 'metodo-nao-suportado' }, 405);
+  }
 
   if (req.method === 'GET') {
+    // ?lista=1 devolve só os meses arquivados, sem baixar os pacotes
+    if (new URL(req.url).searchParams.get('lista')) {
+      const { blobs } = await store.list({ prefix: PREFIXO_ARQ });
+      return json({ meses: blobs.map(b => b.key.slice(PREFIXO_ARQ.length)).sort() });
+    }
     const texto = await store.get(CHAVE_BLOB, { type: 'text' });
     return json(texto || 'null');
   }
