@@ -249,6 +249,13 @@ input[type=file]{display:none;}
 .msg-badge.dirty{background:#FFF6E5;color:var(--amber);border-color:#F0DCB4;}
 .msg-badge.stale{background:#FDEDED;color:#B4302B;border-color:#F2C9C7;}
 .wl-msg.edited{background:#F6FBF7;border-color:var(--green-border);}
+.hist-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:14px;}
+.hist-bar label{font-size:11px;font-weight:600;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em;}
+.hist-bar select{font-family:'Inter',sans-serif;font-size:12.5px;height:34px;padding:0 10px;border:1px solid var(--border-strong);border-radius:var(--radius);background:var(--surface);color:var(--ink);outline:none;}
+.hist-bar select:focus{border-color:var(--navy);}
+.hist-aviso{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:500;padding:7px 13px;border-radius:var(--radius);background:#FFF6E5;color:#8A5B00;border:1px solid #F0DCB4;}
+.panel-arquivo #view-risco,.panel-arquivo #view-acao{opacity:.97;}
+.panel-arquivo .kpi-card{cursor:default;}
 .wl-reg{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding-top:12px;border-top:1px solid var(--border);}
 .wl-reg label{font-size:11px;color:var(--ink-3);font-weight:500;}
 .wl-reg select,.wl-reg input{font-family:'Inter',sans-serif;font-size:12px;height:32px;padding:0 9px;border:1px solid var(--border-strong);border-radius:var(--radius);background:var(--surface);color:var(--ink);outline:none;}
@@ -343,6 +350,12 @@ input[type=file]{display:none;}
 
   <!-- ══ Painel ══ -->
   <div id="panel" style="display:none">
+    <div class="hist-bar" id="hist-bar" style="display:none">
+      <label for="sel-painel">Painel exibido:</label>
+      <select id="sel-painel" onchange="trocarPainel(this.value)"></select>
+      <span class="hist-aviso" id="hist-aviso" style="display:none"></span>
+      <button class="btn-ghost" id="btn-voltar-atual" style="display:none" onclick="voltarAoAtual()">↩ Voltar ao painel atual</button>
+    </div>
     <div class="banner">
       <div class="upd-dot"></div>
       <span id="banner-text"></span>
@@ -695,11 +708,11 @@ function setMode(m) {
   document.getElementById('mb-mensal').classList.toggle('on', m === 'mensal');
   document.getElementById('mb-semanal').classList.toggle('on', m === 'semanal');
   document.getElementById('drop-gestao').classList.toggle('dis', m === 'semanal');
-  document.getElementById('drop-form').classList.toggle('dis', m === 'semanal');
+  document.getElementById('drop-form').classList.remove('dis');   // o formulário vale nos dois modos
   document.getElementById('lbl-mes').textContent = m === 'mensal' ? 'Último mês fechado (referência da classificação):' : 'Mês corrente (dados parciais):';
   document.getElementById('mode-desc').innerHTML = m === 'mensal'
     ? '<strong>Fechamento mensal:</strong> classifica os alunos em risco que serão acompanhados durante o mês (Crítico, Alto, Moderado) com base nos meses fechados, e registra a <strong>origem</strong> de cada aluno em relação ao painel anterior. Exige as duas planilhas. A classificação fica congelada até o próximo fechamento.'
-    : '<strong>Atualização semanal:</strong> atualiza a frequência parcial do mês corrente <em>sem alterar a classificação de risco</em> definida no fechamento. Recalcula apenas a <strong>tendência dentro do mês</strong>: Em recuperação, Estável ou Em queda. Exige só a planilha de frequência.';
+    : '<strong>Atualização semanal:</strong> atualiza a frequência parcial do mês corrente <em>sem alterar a classificação de risco</em> definida no fechamento. Recalcula a <strong>tendência dentro do mês</strong> (Em recuperação, Estável, Em queda) e, se você enviar o <strong>Formulário CS</strong> junto, também refaz o perfil, a categoria e a mensagem sugerida dos moderados com as respostas novas. Exige só a planilha de frequência.';
   refreshMonthSelect();
   refreshProcessBtn();
 }
@@ -1101,6 +1114,15 @@ function matchFreq(key, freqMap, tokenIndex) {
 
 /* ── FECHAMENTO MENSAL ────────────────────────────── */
 async function runMensal(mesRef) {
+  if (emArquivo()) { log('Você está vendo um painel arquivado. Volte ao painel atual para processar um fechamento.', 'err'); return; }
+  if (state && state.baseline && mesRef < state.baseline.mesRef) {
+    const atual = monthFullLabel(nextMonthKey(state.baseline.mesRef));
+    const novo = monthFullLabel(nextMonthKey(mesRef));
+    if (!confirm('O painel vigente é o de ' + atual + ' e você está processando o fechamento de ' + novo + ', que é anterior.\n\nO painel de ' + atual + ' será arquivado e o painel exibido passará a ser o de ' + novo + '. Use isso para reconstruir meses antigos em sequência.\n\nContinuar?')) {
+      log('Fechamento cancelado.', 'warn');
+      return;
+    }
+  }
   const { ativos: alunos, all } = parseGestao(files.gestao.wb);
   if (!alunos.length) { log('Nenhum aluno ativo encontrado na planilha de gestão — verifique a aba "Alunos" e a coluna Status. Cabeçalhos lidos: ' + (gestaoHeaders.join(' · ') || '(nenhum)'), 'err'); return; }
   log(`Gestão: <strong>${alunos.length}</strong> alunos ativos.`);
@@ -1237,6 +1259,13 @@ async function runMensal(mesRef) {
   const counts = r => ({ total: r.length, crit: r.filter(x => x.risco === 'Crítico').length, alto: r.filter(x => x.risco === 'Alto').length, mod: r.filter(x => x.risco === 'Moderado').length, n2026: r.filter(x => x.novo_2026).length });
   const history = state && state.history ? state.history : [];
   if (prev) history.push({ mesRef: prev.mesRef, dataClassificacao: prev.dataClassificacao, counts: counts(prev.alunos), riscoByKey: prevMap });
+
+  // ── arquiva o painel que está saindo, para consulta histórica ──
+  let arquivos = (state && state.arquivos) ? state.arquivos.slice() : [];
+  if (prev) {
+    const idx = await arquivarPainel(prev, state, counts(prev.alunos));
+    if (idx) arquivos = idx;
+  }
   const acoesRegistro = (state && state.acoesRegistro) ? state.acoesRegistro : {};
   const mensagens = (state && state.mensagens) ? state.mensagens : {};
   const timoneiros = (files.timo && files.timo.pares)
@@ -1256,7 +1285,8 @@ async function runMensal(mesRef) {
     history,
     acoesRegistro,
     mensagens,
-    timoneiros
+    timoneiros,
+    arquivos
   };
   await save();
   const c = counts(emRisco);
@@ -1276,6 +1306,7 @@ async function runMensal(mesRef) {
 
 /* ── ATUALIZAÇÃO SEMANAL ──────────────────────────── */
 async function runSemanal(mesCur) {
+  if (emArquivo()) { log('Você está vendo um painel arquivado. Volte ao painel atual para atualizar a semana.', 'err'); return; }
   const b = state.baseline;
   const monthInfo = freqMonths.find(m => m.key === mesCur);
   const mp = parseFreqSheet(files.freq.wb, monthInfo.sheet);
@@ -1297,9 +1328,39 @@ async function runSemanal(mesCur) {
 
   if (!state.weekly || state.weekly.mes !== mesCur) state.weekly = { mes: mesCur, updates: [] };
   state.weekly.updates.push({ data: new Date().toISOString(), arquivo: files.freq.name, values, prev: prevWeekly });
+
+  /* Formulário CS no meio do mês: a percepção do consultor refina o
+     perfil, a categoria e a mensagem dos moderados. A classificação
+     de risco do fechamento continua intocada. */
+  let refino = null;
+  if (files.form && files.form.map) {
+    const fm = files.form.map;
+    let mods = 0, comForm = 0, novos = 0, mudouPerfil = 0;
+    b.alunos.forEach(a => {
+      if (a.risco !== 'Moderado' || !a.acaoCS) return;
+      mods++;
+      const fr = fm.get(a.key) || matchFormResp(a.key, fm);
+      if (!fr) return;
+      comForm++;
+      const antesPerfil = a.acaoCS.perfil;
+      const antesSemForm = !!a.acaoCS.precisaConfirmar;
+      a.acaoCS = deriveAcaoCS(a, fr);
+      if (antesSemForm) novos++;
+      if (antesPerfil !== a.acaoCS.perfil) mudouPerfil++;
+    });
+    b.arquivoForm = files.form.name;
+    refino = { mods, comForm, novos, mudouPerfil };
+  }
+
   await save();
   log(`<strong>Atualização semanal de ${monthFullLabel(mesCur)} registrada</strong> (${state.weekly.updates.length}ª do mês): ${comDado} alunos com dado parcial · ↑ ${recup} em recuperação · → ${estavel} estáveis · ↓ ${queda} em queda · ${semReg} sem registro no mês.`, 'ok');
-  log('A classificação de risco do fechamento foi mantida — apenas a tendência dentro do mês foi recalculada.');
+  if (refino) {
+    log(`<strong>Formulário CS aplicado:</strong> ${refino.comForm} de ${refino.mods} moderados com percepção do consultor` +
+      (refino.novos ? ` · ${refino.novos} saíram do "confirmar perfil antes de abordar"` : '') +
+      (refino.mudouPerfil ? ` · ${refino.mudouPerfil} mudaram de perfil (a mensagem sugerida foi refeita)` : ' · nenhum perfil mudou'), 'ok');
+    if (refino.mudouPerfil) log('Mensagens que o CS já tinha salvo foram mantidas e aparecem marcadas quando o perfil mudou.');
+  }
+  log('A classificação de risco do fechamento foi mantida — apenas a tendência dentro do mês' + (refino ? ', o perfil e a mensagem dos moderados foram recalculados.' : ' foi recalculada.'));
   document.getElementById('upd-card').classList.remove('open');
   renderAll();
 }
@@ -1354,10 +1415,10 @@ function pedirChaveAcesso(msg) {
   return true;
 }
 /* refaz a chamada uma única vez se a chave estiver faltando ou errada */
-async function chamarApi(opcoes, jaTentou) {
-  const r = await fetch(API_ESTADO, Object.assign({ headers: cabecalhosApi() }, opcoes, { headers: cabecalhosApi() }));
+async function chamarApi(opcoes, jaTentou, qs) {
+  const r = await fetch(API_ESTADO + (qs || ''), Object.assign({ headers: cabecalhosApi() }, opcoes, { headers: cabecalhosApi() }));
   if (r.status === 401 && !jaTentou) {
-    if (pedirChaveAcesso('Painel protegido. Informe a chave de acesso compartilhada:')) return chamarApi(opcoes, true);
+    if (pedirChaveAcesso('Painel protegido. Informe a chave de acesso compartilhada:')) return chamarApi(opcoes, true, qs);
   }
   return r;
 }
@@ -1405,6 +1466,101 @@ async function cloudSet(key, value) {
   }
   return false;
 }
+/* ════════════════════════════════════════════════════
+   ARQUIVO MENSAL
+   Cada painel fechado vira um pacote próprio, guardado fora do
+   estado vivo: assim o histórico cresce sem inchar o que trafega
+   a cada registro do CS. O estado vivo guarda só o índice.
+   ════════════════════════════════════════════════════ */
+const SUFIXO_ARQ = '__arq__';
+const chaveArq = mes => LS_KEY + SUFIXO_ARQ + mes;
+
+async function cloudGetArq(mes) {
+  if (modoArmazenamento === 'artefato') {
+    try { const r = await window.storage.get(chaveArq(mes), true); return r ? r.value : null; }
+    catch (e) { return null; }
+  }
+  if (modoArmazenamento === 'api') {
+    try {
+      const r = await chamarApi({ method: 'GET' }, false, '?mes=' + encodeURIComponent(mes));
+      if (!r.ok) return null;
+      const t = await r.text();
+      return (t && t !== 'null') ? t : null;
+    } catch (e) { return null; }
+  }
+  try { return localStorage.getItem(chaveArq(mes)); } catch (e) { return null; }
+}
+async function cloudSetArq(mes, valor) {
+  if (modoArmazenamento === 'artefato') {
+    try { await window.storage.set(chaveArq(mes), valor, true); return true; }
+    catch (e) { console.error('arquivo mensal falhou', e); return false; }
+  }
+  if (modoArmazenamento === 'api') {
+    try {
+      const r = await chamarApi({ method: 'PUT', body: valor }, false, '?mes=' + encodeURIComponent(mes));
+      return r.ok;
+    } catch (e) { console.error('arquivo mensal falhou', e); return false; }
+  }
+  try { localStorage.setItem(chaveArq(mes), valor); return true; } catch (e) { return false; }
+}
+async function cloudDelArq(mes) {
+  if (modoArmazenamento === 'artefato') {
+    try { await window.storage.delete(chaveArq(mes), true); } catch (e) { /* ok */ }
+  } else if (modoArmazenamento === 'api') {
+    try { await chamarApi({ method: 'DELETE' }, false, '?mes=' + encodeURIComponent(mes)); } catch (e) { /* ok */ }
+  } else {
+    try { localStorage.removeItem(chaveArq(mes)); } catch (e) { /* ok */ }
+  }
+}
+
+/* congela o painel que está saindo e devolve o índice atualizado */
+async function arquivarPainel(bl, est, cnt) {
+  const mesPainel = nextMonthKey(bl.mesRef);
+  const chaves = new Set(bl.alunos.map(a => a.key));
+  const sóDoPainel = m => {
+    const o = {};
+    Object.keys(m || {}).forEach(k => { if (chaves.has(k)) o[k] = m[k]; });
+    return o;
+  };
+  const registros = sóDoPainel(est && est.acoesRegistro);
+  const pacote = {
+    versao: 1,
+    mesPainel, mesRef: bl.mesRef,
+    dataClassificacao: bl.dataClassificacao,
+    dataArquivamento: new Date().toISOString(),
+    baseline: bl,
+    weekly: (est && est.weekly && est.weekly.mes === mesPainel) ? est.weekly : null,
+    acoesRegistro: registros,
+    mensagens: sóDoPainel(est && est.mensagens),
+    timoneiros: est ? est.timoneiros : null,
+    counts: cnt
+  };
+  /* Um painel classificado depois do mês que ele representa é uma
+     reconstituição a partir das planilhas de hoje, não o retrato do
+     que a operação via na época. A diferença precisa ficar à vista. */
+  const [ay, am] = mesPainel.split('-').map(Number);
+  const fimDoMes = new Date(am === 12 ? ay + 1 : ay, am === 12 ? 0 : am, 1).getTime();
+  pacote.reconstruido = Date.parse(bl.dataClassificacao) > fimDoMes;
+
+  const ok = await cloudSetArq(mesPainel, JSON.stringify(pacote));
+  if (!ok) {
+    log('Não foi possível arquivar o painel de ' + monthFullLabel(mesPainel) + ' — ele não vai aparecer no histórico.', 'warn');
+    return null;
+  }
+  const abordados = Object.keys(registros)
+    .filter(k => registros[k].status && registros[k].status !== 'Aguardando abordagem').length;
+  const idx = ((est && est.arquivos) || []).filter(x => x.mes !== mesPainel);
+  idx.push({
+    mes: mesPainel, mesRef: bl.mesRef,
+    dataClassificacao: bl.dataClassificacao,
+    dataArquivamento: pacote.dataArquivamento,
+    counts: cnt, abordados, reconstruido: pacote.reconstruido
+  });
+  idx.sort((a, b) => a.mes.localeCompare(b.mes));
+  log('Painel de <strong>' + monthFullLabel(mesPainel) + '</strong> arquivado: ' + cnt.total + ' alunos em risco e ' + abordados + ' abordagem' + (abordados === 1 ? '' : 's') + ' registrada' + (abordados === 1 ? '' : 's') + '.', 'ok');
+  return idx;
+}
+
 async function cloudDel(key) {
   if (modoArmazenamento === 'artefato') {
     try { await window.storage.delete(key, true); } catch (e) { /* ok se não existir */ }
@@ -1437,13 +1593,25 @@ function mergeMapa(local, remoto, campoTs) {
   return out;
 }
 /* traz o que os outros gravaram para dentro do estado local */
+/* união do índice de meses arquivados, vencendo o arquivamento mais recente */
+function mergeArquivos(a, b) {
+  const porMes = new Map();
+  [...(a || []), ...(b || [])].forEach(item => {
+    if (!item || !item.mes) return;
+    const atual = porMes.get(item.mes);
+    if (!atual) { porMes.set(item.mes, item); return; }
+    if ((Date.parse(item.dataArquivamento) || 0) > (Date.parse(atual.dataArquivamento) || 0)) porMes.set(item.mes, item);
+  });
+  return [...porMes.values()].sort((x, y) => x.mes.localeCompare(y.mes));
+}
 function mergeRemoto(remoto) {
   if (!mesmoPainel(state, remoto)) return false;
-  const antes = JSON.stringify([state.acoesRegistro, state.mensagens]);
+  const antes = JSON.stringify([state.acoesRegistro, state.mensagens, state.arquivos]);
   state.acoesRegistro = mergeMapa(state.acoesRegistro, remoto.acoesRegistro, 'updatedAt');
   state.mensagens = mergeMapa(state.mensagens, remoto.mensagens, 'ts');
+  state.arquivos = mergeArquivos(state.arquivos, remoto.arquivos);
   if (remoto.weekly && (!state.weekly || (remoto.weekly.updates || []).length > (state.weekly.updates || []).length)) state.weekly = remoto.weekly;
-  return JSON.stringify([state.acoesRegistro, state.mensagens]) !== antes;
+  return JSON.stringify([state.acoesRegistro, state.mensagens, state.arquivos]) !== antes;
 }
 async function puxarRemoto() {
   if (!CLOUD || !state || !state.baseline) return false;
@@ -1454,6 +1622,7 @@ async function puxarRemoto() {
   return mergeRemoto(remoto);
 }
 async function save() {
+  if (emArquivo()) return;   // painel arquivado nunca grava
   let synced = true;
   if (CLOUD) {
     await puxarRemoto();
@@ -1466,6 +1635,7 @@ async function save() {
         if (mesmoPainel(state, fundido)) {
           if (fundido.acoesRegistro) state.acoesRegistro = fundido.acoesRegistro;
           if (fundido.mensagens) state.mensagens = fundido.mensagens;
+          if (fundido.arquivos) state.arquivos = fundido.arquivos;
         }
       } catch (e) { /* resposta ilegível — mantém o estado local */ }
     }
@@ -1525,6 +1695,9 @@ function importSnapshot(input) {
 }
 async function clearAll() {
   if (!confirm('Limpar todos os dados do painel' + (CLOUD ? ' (inclusive a versão sincronizada com o time)' : ' salvos neste navegador') + '? O histórico de origem será perdido — exporte um snapshot antes, se necessário.')) return;
+  const arqs = (estadoVivo() && estadoVivo().arquivos) ? estadoVivo().arquivos.map(a => a.mes) : [];
+  for (const m of arqs) await cloudDelArq(m);
+  painelVivo = null; mesArquivoAberto = null;
   if (CLOUD) await cloudDel(LS_KEY);
   localStorage.removeItem(LS_KEY); state = null;
   clearLog(); log('Dados do painel removidos.', 'warn');
@@ -1753,6 +1926,103 @@ let wlF = { q: '', perfil: '', status: '', timo: '' };
 
 function cssId(key) { return String(key).replace(/[^a-z0-9]/gi, '-'); }
 
+/* ════════════════════════════════════════════════════
+   NAVEGAÇÃO ENTRE MESES
+   O painel arquivado abre congelado: nada do que se vê ali pode
+   ser alterado, porque é o registro do que a operação tinha em
+   mãos naquele fechamento. O estado vivo fica guardado em
+   painelVivo enquanto durar a consulta.
+   ════════════════════════════════════════════════════ */
+let painelVivo = null;
+let mesArquivoAberto = null;
+function emArquivo() { return !!mesArquivoAberto; }
+function estadoVivo() { return painelVivo || state; }
+function bloqueadoNoArquivo() {
+  if (!emArquivo()) return false;
+  alert('Painel de ' + monthFullLabel(mesArquivoAberto) + ' — arquivado e somente leitura.\n\nVolte ao painel atual para registrar abordagens ou editar mensagens.');
+  return true;
+}
+function limparFiltros() {
+  wlF = { q: '', perfil: '', status: '', timo: '' };
+  only2026 = false; riskFilter = '';
+}
+async function trocarPainel(v) {
+  if (!v || v === '__atual') return voltarAoAtual();
+  if (mesArquivoAberto === v) return;
+  const sel = document.getElementById('sel-painel');
+  if (sel) sel.disabled = true;
+  const txt = await cloudGetArq(v);
+  if (sel) sel.disabled = false;
+  if (!txt) {
+    clearLog();
+    log('Não consegui carregar o painel arquivado de ' + monthFullLabel(v) + '.', 'err');
+    atualizarBarraHistorico();
+    return;
+  }
+  let pac;
+  try { pac = JSON.parse(txt); } catch (e) { log('Painel arquivado de ' + monthFullLabel(v) + ' está ilegível.', 'err'); atualizarBarraHistorico(); return; }
+  const vivo = estadoVivo();
+  painelVivo = vivo;
+  mesArquivoAberto = v;
+  state = {
+    baseline: pac.baseline,
+    weekly: pac.weekly || null,
+    history: vivo.history || [],
+    acoesRegistro: pac.acoesRegistro || {},
+    mensagens: pac.mensagens || {},
+    arquivos: vivo.arquivos || [],
+    timoneiros: pac.timoneiros || vivo.timoneiros || null
+  };
+  limparFiltros();
+  curView = 'risco';
+  renderAll();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+function voltarAoAtual() {
+  if (!painelVivo) { atualizarBarraHistorico(); return; }
+  state = painelVivo;
+  painelVivo = null;
+  mesArquivoAberto = null;
+  limparFiltros();
+  curView = 'risco';
+  renderAll();
+}
+function atualizarBarraHistorico() {
+  const barra = document.getElementById('hist-bar');
+  const sel = document.getElementById('sel-painel');
+  const aviso = document.getElementById('hist-aviso');
+  const btn = document.getElementById('btn-voltar-atual');
+  if (!barra || !sel) return;
+  const vivo = estadoVivo();
+  const arqs = (vivo && vivo.arquivos) ? vivo.arquivos.slice().sort((a, b) => b.mes.localeCompare(a.mes)) : [];
+  if (!arqs.length && !emArquivo()) { barra.style.display = 'none'; return; }
+  barra.style.display = '';
+  const mesVivo = (vivo && vivo.baseline) ? nextMonthKey(vivo.baseline.mesRef) : null;
+  let html = mesVivo ? `<option value="__atual">${monthFullLabel(mesVivo)} — painel atual</option>` : '';
+  arqs.forEach(a => {
+    if (a.mes === mesVivo && !emArquivo()) return;   // sobra de reprocessamento: o vivo já mostra esse mês
+    const n = a.counts ? ` · ${a.counts.total} em risco` : '';
+    html += `<option value="${a.mes}">${monthFullLabel(a.mes)} — ${a.reconstruido ? 'reconstruído' : 'arquivado'}${n}</option>`;
+  });
+  sel.innerHTML = html;
+  sel.value = mesArquivoAberto || '__atual';
+  if (emArquivo()) {
+    const info = arqs.find(a => a.mes === mesArquivoAberto);
+    aviso.style.display = '';
+    aviso.innerHTML = (info && info.reconstruido
+      ? '🔒 Somente leitura — painel reconstruído em ' + fmtDate(info.dataClassificacao) + ' a partir das planilhas atuais'
+      : '🔒 Somente leitura — painel congelado em ' + (info ? fmtDate(info.dataClassificacao) : '—')) +
+      (info && info.abordados != null ? ' · ' + info.abordados + ' abordagem' + (info.abordados === 1 ? '' : 's') + ' registrada' + (info.abordados === 1 ? '' : 's') + ' naquele mês' : '');
+    btn.style.display = '';
+  } else {
+    aviso.style.display = 'none';
+    btn.style.display = 'none';
+  }
+  document.body.classList.toggle('panel-arquivo', emArquivo());
+  const upd = document.getElementById('upd-card');
+  if (upd) upd.style.display = emArquivo() ? 'none' : '';
+}
+
 /* ── mensagem editada pelo CS ──────────────────────
    state.mensagens[key] = { texto, ts, perfil }  → sincroniza junto
    com o resto do painel (link publicado + snapshot).
@@ -1779,6 +2049,7 @@ function msgTyping(key, val, el) {
   if (badge && suj) { badge.className = 'msg-badge dirty'; badge.textContent = '● alterações não salvas'; }
 }
 function saveMsg(key) {
+  if (bloqueadoNoArquivo()) return;
   const a = state.baseline.alunos.find(x => x.key === key);
   if (!a || !a.acaoCS) return;
   const ta = document.getElementById('msg-' + cssId(key));
@@ -1792,6 +2063,7 @@ function saveMsg(key) {
   renderWlBody();
 }
 function resetMsg(id, key) {
+  if (bloqueadoNoArquivo()) return;
   const a = state.baseline.alunos.find(x => x.key === key);
   if (!a || !a.acaoCS) return;
   if (msgSalva(key) && !confirm('Restaurar a sugestão automática e descartar a mensagem salva para ' + a.nome + '?')) return;
@@ -1981,13 +2253,13 @@ function wlCard(a) {
         </div>
         <div class="wl-actions" style="margin-top:10px">
           <button class="wl-btn primary" onclick="copyMsg('msg-${id}', this)">📋 Copiar mensagem</button>
-          <button class="wl-btn" id="msgsave-${id}" onclick="saveMsg(${keyArg})"${sujo ? '' : ' disabled'}>💾 Salvar mensagem editada</button>
-          <button class="wl-btn" onclick="resetMsg('${id}', ${keyArg})">↺ Restaurar sugestão</button>
+          <button class="wl-btn" id="msgsave-${id}" onclick="saveMsg(${keyArg})"${(sujo && !emArquivo()) ? '' : ' disabled'}>💾 Salvar mensagem editada</button>
+          <button class="wl-btn" onclick="resetMsg('${id}', ${keyArg})"${emArquivo() ? ' disabled' : ''}>↺ Restaurar sugestão</button>
         </div>
       </div>
       <div class="wl-reg">
         <label>Resultado:</label>
-        <select onchange="setReg(${JSON.stringify(a.key).replace(/"/g, '&quot;')}, 'status', this.value)">${statusOpts}</select>
+        <select${emArquivo() ? ' disabled' : ''} onchange="setReg(${JSON.stringify(a.key).replace(/"/g, '&quot;')}, 'status', this.value)">${statusOpts}</select>
         <label>Data:</label>
         <input type="date" value="${esc(reg.data || '')}" onchange="setReg(${JSON.stringify(a.key).replace(/"/g, '&quot;')}, 'data', this.value)">
         <input type="text" placeholder="Observação (opcional)" value="${esc(reg.nota || '')}" style="width:220px" onchange="setReg(${JSON.stringify(a.key).replace(/"/g, '&quot;')}, 'nota', this.value)">
@@ -2006,6 +2278,7 @@ function copyMsg(id, btn) {
   else { document.execCommand('copy'); done(); }
 }
 function setReg(key, field, value) {
+  if (bloqueadoNoArquivo()) { renderWlBody(); return; }
   if (!state.acoesRegistro) state.acoesRegistro = {};
   const upd = Object.assign({}, regOf(key), { [field]: value, updatedAt: new Date().toISOString() });
   if (field === 'status' && value !== 'Aguardando abordagem' && !upd.data) upd.data = new Date().toISOString().slice(0, 10);
@@ -2017,6 +2290,7 @@ function setReg(key, field, value) {
 }
 
 function renderAll() {
+  atualizarBarraHistorico();
   const has = state && state.baseline;
   document.getElementById('setup').style.display = has ? 'none' : 'block';
   document.getElementById('panel').style.display = has ? 'block' : 'none';
@@ -2164,6 +2438,7 @@ function filterOrigem(o) { document.getElementById('f-origem').value = o; applyF
    esta janela estava parada — evita trabalhar sobre dado velho */
 let sincronizando = false;
 async function sincronizarSeMudou() {
+  if (emArquivo()) return;   // não mistura o que os colegas gravam com um painel congelado
   if (!CLOUD || sincronizando || !state || !state.baseline) return;
   sincronizando = true;
   try {
